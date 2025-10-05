@@ -117,14 +117,14 @@ export async function POST(request: NextRequest) {
     console.log('[API DEBUG] Schema validation passed');
 
  
-    const textProcessor = new TextProcessor();
     const database = getDatabase();
+    const isProduction = process.env.NODE_ENV === 'production';
 
 
     const editRecord: PuppeteerTextEdit = {
       originalText: editData.originalText,
       newText: editData.newText,
-      status: 'processing',
+      status: isProduction ? 'pending' : 'processing',
       confidence: 0,
       projectId: editData.projectId,
       elementContext: editData.elementContext,
@@ -140,7 +140,39 @@ export async function POST(request: NextRequest) {
 
     const editId = await database.saveEdit(editRecord);
 
+    // In production: Save to database and trigger GitHub Actions
+    if (isProduction) {
+      console.log('[PRODUCTION] Edit saved to database, triggering sync...');
+      
+      // Trigger GitHub Actions workflow (non-blocking)
+      try {
+        const syncToken = process.env.SYNC_SECRET_TOKEN;
+        if (syncToken) {
+          await fetch(`${process.env.NEXT_PUBLIC_SITE_URL}/api/text-editor/trigger-sync`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${syncToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ editId }),
+          });
+        }
+      } catch (syncError) {
+        console.error('[PRODUCTION] Sync trigger failed (non-fatal):', syncError);
+      }
 
+      return NextResponse.json({
+        success: true,
+        editId,
+        projectId: editData.projectId,
+        message: 'Edit saved to database. Changes will be deployed in 2-5 minutes.',
+        mode: 'production',
+        status: 'pending',
+      }, { status: 202 });
+    }
+
+    // In development: Apply changes immediately
+    const textProcessor = new TextProcessor();
     const processEditData = {
       ...editData,
       elementContext: {

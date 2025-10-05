@@ -13,7 +13,7 @@ export default function HomePage() {
     },
     {
       icon: <Zap className="w-6 h-6" />,
-      title: "Lightning Fast",
+      title: "Very Very Fast",
       description: "Optimized performance with automatic code splitting and lazy loading"
     },
     {
@@ -108,7 +108,7 @@ export default function HomePage() {
       <section id="features" className="py-20 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto">
           <h3 className="text-4xl font-bold text-center text-white mb-16">
-            Why Choose Us
+  Why Choose This
           </h3>
           <div className="grid md:grid-cols-3 gap-8">
             {features.map((feature, index) => (

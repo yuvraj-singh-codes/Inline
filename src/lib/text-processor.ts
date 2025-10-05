@@ -566,15 +566,23 @@ export class TextProcessor {
 
   async processTextEdit(editContext: EditContext): Promise<ProcessResult> {
     try {
+      console.log('[TextProcessor] Starting search for text:', editContext.originalText);
+      console.log('[TextProcessor] Project root:', this.projectRoot);
+      console.log('[TextProcessor] Source dir:', this.sourceDir);
  
       const allMatches = await this.findTextInSourceFiles(editContext.originalText);
 
+      console.log('[TextProcessor] Found', allMatches.length, 'matches');
       if (allMatches.length === 0) {
+        console.error('[TextProcessor] NO MATCHES FOUND');
+        console.error('[TextProcessor] Searched for:', editContext.originalText);
+        console.error('[TextProcessor] In directory:', this.sourceDir);
+        console.error('[TextProcessor] Page context:', editContext.pageContext);
         return {
           success: false,
           confidence: 0,
           hasConflicts: false,
-          errorMessage: `No matches found`,
+          errorMessage: `No matches found for text: "${editContext.originalText.substring(0, 50)}..." in ${this.sourceDir}`,
         };
       }
 
@@ -635,6 +643,10 @@ export class TextProcessor {
     const cleanedText = this.cleanSearchText(originalText);
     const searchVariations = this.extractDynamicPart(cleanedText);
     
+    console.log('[TextProcessor] Original text:', JSON.stringify(originalText));
+    console.log('[TextProcessor] Cleaned text:', JSON.stringify(cleanedText));
+    console.log('[TextProcessor] Search variations:', searchVariations);
+    
     if (originalText.includes('Häufig gestellte Fragen')) {
       console.log('[TEMP DEBUG] FAQ text processing:');
       console.log('[TEMP DEBUG] Original:', JSON.stringify(originalText));
@@ -673,6 +685,9 @@ export class TextProcessor {
       }
       }
     }
+
+    console.log(`[TextProcessor] Found ${allFiles.length} total files to search`);
+    console.log(`[TextProcessor] Sample files:`, allFiles.slice(0, 5));
 
     const matches: FileMatch[] = [];
 
@@ -730,6 +745,15 @@ export class TextProcessor {
       }
     }
 
+    console.log(`[TextProcessor] Total raw matches found: ${matches.length}`);
+    if (matches.length > 0) {
+      console.log('[TextProcessor] First 3 matches:');
+      matches.slice(0, 3).forEach((match, i) => {
+        console.log(`  ${i + 1}. ${match.filePath}:${match.lineNumber}`);
+        console.log(`     Line: ${match.originalLine.substring(0, 100)}`);
+      });
+    }
+    
     if (originalText.includes('Häufig gestellte Fragen')) {
       console.log('[TEMP DEBUG] Raw matches found:', matches.length);
       matches.forEach((match, i) => {
