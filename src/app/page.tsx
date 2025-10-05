@@ -13,7 +13,7 @@ export default function HomePage() {
     },
     {
       icon: <Zap className="w-6 h-6" />,
-      title: "Very Very Fast",
+      title: "Lightning Fast",
       description: "Optimized performance with automatic code splitting and lazy loading"
     },
     {

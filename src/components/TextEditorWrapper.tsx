@@ -133,9 +133,9 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
   const [textNodes, setTextNodes] = useState<TextNode[]>([]);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   
-  // Use variables to avoid ESLint warnings
-  console.log('TextEditorWrapper - textNodes count:', textNodes.length);
-  console.log('TextEditorWrapper - hoveredNode:', hoveredNode);
+  // Suppress unused variable warnings
+  void textNodes;
+  void hoveredNode;
   
   const [hoveredElement, setHoveredElement] = useState<HTMLElement | null>(null);
   // const [showMenu, setShowMenu] = useState(true);
@@ -348,7 +348,6 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
       });
       
       setTextNodes(nodes);
-      console.log('New nodes found:', nodes.length);
     };
 
     scanForTextNodes();
@@ -390,7 +389,6 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
       
       const hoveredText = cleanCapturedText(target.textContent || '');
       setHoveredNode(hoveredText);
-      console.log('Hovered node:', hoveredText);
       setHoveredElement(target);
     };
 
@@ -513,8 +511,6 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
         newText: editValue.trim(),
       };
 
-      console.log('[TextEditorWrapper] Sending edit request:', JSON.stringify(editContext, null, 2));
-
       const response = await fetch(apiEndpoint, {
         method: 'POST',
         headers: {
@@ -524,7 +520,6 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
       });
 
       const result = await response.json();
-      console.log('[TextEditorWrapper] API response:', response.status, result);
 
       if (result.success) {
         setLastEditResult({
