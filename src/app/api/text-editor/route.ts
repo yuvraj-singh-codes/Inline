@@ -139,18 +139,22 @@ export async function POST(request: NextRequest) {
     const editId = await database.saveEdit(editRecord);
 
     let result;
+    let finalStatus: PuppeteerTextEdit['status'];
     
     // In production, only save to database (files are read-only)
     // In development, try to update source files
     if (isProduction) {
       result = {
-        success: true,
+        success: true, // Show success to user (UI will update)
         confidence: 1.0,
         hasConflicts: false,
         matchedFilePath: 'Database only (production mode)',
         lineNumber: 0,
         matchContext: 'Edit saved to database. Use apply-edits script to apply to source code.',
       };
+      
+      // CRITICAL: Keep status as 'pending' in production so apply-edits.js can process it
+      finalStatus = 'pending';
     } else {
       const processEditData = {
         ...editData,
@@ -161,9 +165,11 @@ export async function POST(request: NextRequest) {
         componentContext: editData.componentContext || undefined,
       };
       result = await textProcessor!.processTextEdit(processEditData);
+      
+      // In development, set status based on whether files were actually modified
+      finalStatus = result.success ? 'applied' : 'failed';
     }
 
-    const finalStatus: PuppeteerTextEdit['status'] = result.success ? 'applied' : 'failed';
     await database.updateEditStatus(editId, finalStatus, {
       matchedFilePath: result.matchedFilePath,
       lineNumber: result.lineNumber,
@@ -185,8 +191,8 @@ export async function POST(request: NextRequest) {
       hasConflicts: result.hasConflicts,
       message: result.success 
         ? (isProduction 
-            ? `Edit saved to database! Changes will be applied when you run 'npm run apply-edits' locally.`
-            : `Successfully updated text in ${result.matchedFilePath} at line ${result.lineNumber}`)
+            ? `✅ Edit saved to database (status: pending)\n\nUI updated temporarily. To apply to source code, run:\nnpm run apply-edits`
+            : `✅ Successfully updated ${result.matchedFilePath} at line ${result.lineNumber}`)
         : result.errorMessage || 'Edit failed',
       alternativeMatches: result.alternativeMatches?.length || 0,
       isProduction,
