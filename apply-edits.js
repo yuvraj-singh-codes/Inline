@@ -1,8 +1,64 @@
+/**
+ * ============================================================================
+ * APPLY EDITS SCRIPT (Enhanced with TextProcessor)
+ * ============================================================================
+ * 
+ * Purpose: Apply text edits from the database to source code files
+ * 
+ * When to use:
+ *   - After making text edits on your live/production website
+ *   - The edits are saved to database but NOT to source files in production
+ *   - Run this script locally to apply database edits to your source code
+ * 
+ * Usage:
+ *   npm run apply-edits              # Apply all pending edits
+ *   npm run apply-edits:dry-run      # Preview what would change (safe)
+ *   npm run apply-edits -- --project-id=my-project  # Specific project
+ * 
+ * Workflow:
+ *   1. User edits text on live website → Saved to database
+ *   2. Pull latest code: git pull
+ *   3. Run this script: npm run apply-edits
+ *   4. Review changes: git diff
+ *   5. Commit and push: git add . && git commit -m "Apply edits" && git push
+ * 
+ * Features:
+ *   ✅ Uses TextProcessor class (same as API route)
+ *   ✅ Advanced context validation
+ *   ✅ Confidence scoring (minimum 50%)
+ *   ✅ Smart text normalization
+ *   ✅ Dry-run mode for safety
+ *   ✅ Status tracking in database
+ * 
+ * Requirements:
+ *   - DATABASE_URL environment variable
+ *   - NEXT_PUBLIC_PROJECT_ID environment variable (optional)
+ * 
+ * ============================================================================
+ */
 
 const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
-const puppeteer = require('puppeteer');
+
+// Import TextProcessor for advanced text matching
+let TextProcessor;
+try {
+  // Try to import the compiled JS version
+  const textProcessorModule = require('./src/lib/text-processor.ts');
+  TextProcessor = textProcessorModule.TextProcessor;
+} catch (error) {
+  console.log('⚠️  Could not load TypeScript directly. Attempting to use ts-node...');
+  try {
+    require('ts-node/register');
+    const textProcessorModule = require('./src/lib/text-processor.ts');
+    TextProcessor = textProcessorModule.TextProcessor;
+  } catch (tsError) {
+    console.error('❌ Failed to load TextProcessor. Please ensure TypeScript files are compiled or ts-node is installed.');
+    console.error('   Run: npm install --save-dev ts-node');
+    process.exit(1);
+  }
+}
 
 // Load environment variables from .env.local
 try {
@@ -46,147 +102,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-async function discoverFilesWithPuppeteer(editContext) {
-  const browser = await puppeteer.launch({ 
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
-  
-  try {
-    const page = await browser.newPage();
-    
-    // Get the page URL from context
-    const pageUrl = editContext.page_context?.page_url || 'http://localhost:3000';
-    console.log(`🌐 Loading page: ${pageUrl}`);
-    
-    await page.goto(pageUrl, { waitUntil: 'networkidle0' });
-    
-    // Get element information from context
-    const elementTag = editContext.element_context?.element_tag;
-    const elementId = editContext.element_context?.element_id;
-    const cssSelector = editContext.element_context?.css_selector;
-    
-    let targetElement = null;
-    
-    // Try to find the specific element using context
-    if (cssSelector) {
-      try {
-        targetElement = await page.$(cssSelector);
-        console.log(`🎯 Found element with CSS selector: ${cssSelector}`);
-      } catch (error) {
-        console.log(`⚠️  Could not find element with CSS selector: ${cssSelector}`);
-      }
-    }
-    
-    if (!targetElement && elementId) {
-      try {
-        targetElement = await page.$(`#${elementId}`);
-        console.log(`🎯 Found element with ID: ${elementId}`);
-      } catch (error) {
-        console.log(`⚠️  Could not find element with ID: ${elementId}`);
-      }
-    }
-    
-    if (!targetElement && elementTag) {
-      try {
-        targetElement = await page.$(elementTag);
-        console.log(`🎯 Found element with tag: ${elementTag}`);
-      } catch (error) {
-        console.log(`⚠️  Could not find element with tag: ${elementTag}`);
-      }
-    }
-    
-    // If we found the element, get its file path information
-    if (targetElement) {
-      const elementInfo = await page.evaluate((el) => {
-        return {
-          tagName: el.tagName,
-          id: el.id,
-          className: el.className,
-          textContent: el.textContent?.trim(),
-          innerHTML: el.innerHTML,
-          outerHTML: el.outerHTML
-        };
-      }, targetElement);
-      
-      console.log(`📄 Element info:`, elementInfo);
-      
-      // Try to determine which file this element might be in
-      const possibleFiles = await determineFileFromElement(elementInfo, pageUrl);
-      return possibleFiles;
-    }
-    
-    return [];
-    
-  } finally {
-    await browser.close();
-  }
-}
-
-async function determineFileFromElement(elementInfo, pageUrl) {
-  const possibleFiles = [];
-  const projectRoot = process.cwd();
-  
-  // Common file extensions to check
-  const extensions = ['.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.txt', '.html', '.css', '.scss'];
-  
-  // Search in common directories
-  const searchDirs = [
-    path.join(projectRoot, 'src'),
-    path.join(projectRoot, 'public'),
-    path.join(projectRoot, 'components'),
-    path.join(projectRoot, 'app'),
-    path.join(projectRoot, 'pages'),
-    projectRoot
-  ];
-  
-  // Function to search for files containing the element text
-  function searchFiles(dir) {
-    if (!fs.existsSync(dir)) return;
-    
-    try {
-      const items = fs.readdirSync(dir);
-      for (const item of items) {
-        const fullPath = path.join(dir, item);
-        const stat = fs.statSync(fullPath);
-        
-        if (stat.isDirectory() && !item.startsWith('.') && !['node_modules', 'dist', 'build', '.next'].includes(item)) {
-          searchFiles(fullPath);
-        } else if (stat.isFile() && extensions.some(ext => item.endsWith(ext))) {
-          try {
-            const content = fs.readFileSync(fullPath, 'utf8');
-            
-            // Check if this file contains the element's text content
-            if (elementInfo.textContent && content.includes(elementInfo.textContent)) {
-              possibleFiles.push(fullPath);
-            }
-            // Also check for the element's HTML structure
-            else if (elementInfo.innerHTML && content.includes(elementInfo.innerHTML)) {
-              possibleFiles.push(fullPath);
-            }
-            // Check for element ID or class references
-            else if (elementInfo.id && content.includes(elementInfo.id)) {
-              possibleFiles.push(fullPath);
-            }
-            else if (elementInfo.className && content.includes(elementInfo.className)) {
-              possibleFiles.push(fullPath);
-            }
-          } catch (error) {
-            // Skip files that can't be read
-          }
-        }
-      }
-    } catch (error) {
-      // Skip directories that can't be read
-    }
-  }
-  
-  // Search all directories
-  searchDirs.forEach(dir => searchFiles(dir));
-  
-  return possibleFiles;
-}
-
 async function getPendingEdits() {
   let client;
   try {
@@ -208,7 +123,13 @@ async function getPendingEdits() {
         element_context_element_tag as element_tag,
         element_context_element_id as element_id,
         element_context_css_selector as css_selector,
+        element_context_element_classes as element_classes,
+        surrounding_context_parent_text as parent_text,
+        surrounding_context_siblings_before as siblings_before,
+        surrounding_context_siblings_after as siblings_after,
         page_context_page_url as page_url,
+        page_context_page_title as page_title,
+        page_context_full_url as full_url,
         metadata,
         created_at
       FROM inline_edits 
@@ -225,7 +146,7 @@ async function getPendingEdits() {
   }
 }
 
-async function updateEditStatus(editId, status, errorMessage = null) {
+async function updateEditStatus(editId, status, errorMessage = null, metadata = null) {
   const client = await pool.connect();
   try {
     const query = `
@@ -237,120 +158,27 @@ async function updateEditStatus(editId, status, errorMessage = null) {
       WHERE id = $1
     `;
     
-    const metadata = errorMessage ? { errorMessage } : {};
-    await client.query(query, [editId, status, JSON.stringify(metadata)]);
+    const updateMetadata = metadata || (errorMessage ? { errorMessage } : {});
+    await client.query(query, [editId, status, JSON.stringify(updateMetadata)]);
   } finally {
     client.release();
   }
 }
 
-async function findAndReplaceInFiles(originalText, newText, editContext = null) {
-  let files = [];
-  
-  // Use Puppeteer for intelligent file discovery if we have context
-  if (editContext && (editContext.element_context || editContext.page_context)) {
-    console.log(`🤖 Using Puppeteer for intelligent file discovery...`);
-    try {
-      files = await discoverFilesWithPuppeteer(editContext);
-      console.log(`🎯 Puppeteer found ${files.length} potential files`);
-    } catch (error) {
-      console.log(`⚠️  Puppeteer discovery failed: ${error.message}`);
-      console.log(`🔄 Falling back to traditional file search...`);
-    }
-  }
-  
-  // Fallback to traditional search if Puppeteer didn't find files or failed
-  if (files.length === 0) {
-    console.log(`🔍 Using traditional file search...`);
-    
-    // Find all supported file types
-    const extensions = ['.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.txt', '.html', '.css', '.scss'];
-    
-    // Search in multiple directories for comprehensive coverage
-    const searchDirs = [
-      path.join(process.cwd(), 'src'),
-      path.join(process.cwd(), 'public'),
-      path.join(process.cwd(), 'components'),
-      path.join(process.cwd(), 'app'),
-      path.join(process.cwd(), 'pages'),
-      process.cwd() // Root directory
-    ];
-    
-    function findFiles(dir) {
-      if (!fs.existsSync(dir)) return;
-      
-      const items = fs.readdirSync(dir);
-      for (const item of items) {
-        const fullPath = path.join(dir, item);
-        const stat = fs.statSync(fullPath);
-        
-        if (stat.isDirectory() && !item.startsWith('.') && item !== 'node_modules' && item !== 'dist' && item !== 'build') {
-          findFiles(fullPath);
-        } else if (stat.isFile() && extensions.some(ext => item.endsWith(ext))) {
-          files.push(fullPath);
-        }
-      }
-    }
-    
-    // Search in all directories
-    searchDirs.forEach(dir => findFiles(dir));
-  }
-  
-  const results = [];
-  
-  for (const filePath of files) {
-    try {
-      const content = fs.readFileSync(filePath, 'utf8');
-      
-      if (content.includes(originalText)) {
-        let newContent = content;
-        let changeCount = 0;
-        
-        // Use context-aware replacement if available
-        if (editContext && editContext.element_context) {
-          // Try to find the specific element context first
-          const elementTag = editContext.element_context.element_tag;
-          const elementId = editContext.element_context.element_id;
-          const cssSelector = editContext.element_context.css_selector;
-          
-          // If we have element context, try to be more precise
-          if (elementTag || elementId || cssSelector) {
-            console.log(`   🎯 Using element context: ${elementTag || 'unknown'} ${elementId || ''} ${cssSelector || ''}`);
-          }
-        }
-        
-        // Perform the replacement with proper escaping
-        const escapedText = originalText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(escapedText, 'g');
-        newContent = content.replace(regex, newText);
-        changeCount = (content.match(regex) || []).length;
-        
-        if (!isDryRun) {
-          fs.writeFileSync(filePath, newContent, 'utf8');
-        }
-        
-        results.push({
-          filePath: path.relative(process.cwd(), filePath),
-          success: true,
-          changes: changeCount
-        });
-      }
-    } catch (error) {
-      results.push({
-        filePath: path.relative(process.cwd(), filePath),
-        success: false,
-        error: error.message
-      });
-    }
-  }
-  
-  return results;
-}
-
-async function applyEdit(edit) {
+async function applyEdit(edit, textProcessor) {
   console.log(`\n📝 Processing edit ${edit.id} (Status: ${edit.status}):`);
   console.log(`   Original: "${edit.original_text}"`);
   console.log(`   New: "${edit.new_text}"`);
+  
+  // Parse metadata if it's a string
+  let metadata = edit.metadata;
+  if (typeof metadata === 'string') {
+    try {
+      metadata = JSON.parse(metadata);
+    } catch (e) {
+      metadata = {};
+    }
+  }
   
   console.log(`   🔍 Context data:`, {
     element_tag: edit.element_tag,
@@ -360,49 +188,111 @@ async function applyEdit(edit) {
   });
   
   if (isDryRun) {
-    console.log(`   🔍 DRY RUN: Would apply this edit`);
+    console.log(`   🔍 DRY RUN: Would apply this edit using TextProcessor`);
     return { success: true, isDryRun: true };
   }
   
+  // Parse element classes if it's a string
+  let elementClasses = edit.element_classes || metadata?.elementClasses || [];
+  if (typeof elementClasses === 'string') {
+    try {
+      elementClasses = JSON.parse(elementClasses);
+    } catch (e) {
+      elementClasses = [];
+    }
+  }
+  
+  // Parse siblings if they're strings
+  let siblingsBefore = edit.siblings_before || metadata?.surroundingContext?.siblingsBefore || [];
+  let siblingsAfter = edit.siblings_after || metadata?.surroundingContext?.siblingsAfter || [];
+  
+  if (typeof siblingsBefore === 'string') {
+    try { siblingsBefore = JSON.parse(siblingsBefore); } catch (e) { siblingsBefore = []; }
+  }
+  if (typeof siblingsAfter === 'string') {
+    try { siblingsAfter = JSON.parse(siblingsAfter); } catch (e) { siblingsAfter = []; }
+  }
+  
+  // Build edit context in the format TextProcessor expects
   const editContext = {
-    element_context: {
-      element_tag: edit.element_tag,
-      element_id: edit.element_id,
-      css_selector: edit.css_selector
+    originalText: edit.original_text,
+    newText: edit.new_text,
+    projectId: metadata?.projectId || projectId,
+    elementContext: {
+      elementTag: edit.element_tag || 'div',
+      elementClasses: elementClasses,
+      elementId: edit.element_id,
+      cssSelector: edit.css_selector || '',
+      elementPath: edit.css_selector || '',
     },
-    page_context: {
-      page_url: edit.page_url
+    surroundingContext: {
+      parentText: edit.parent_text,
+      siblingsBefore: siblingsBefore,
+      siblingsAfter: siblingsAfter,
+      ...metadata?.surroundingContext,
     },
-    metadata: edit.metadata
+    pageContext: {
+      pageUrl: edit.page_url || '/',
+      pageTitle: edit.page_title || metadata?.pageTitle,
+      fullUrl: edit.full_url || metadata?.fullUrl,
+    },
+    componentContext: metadata?.componentContext || null,
   };
   
   try {
-    const results = await findAndReplaceInFiles(edit.original_text, edit.new_text, editContext);
+    console.log(`   🤖 Using TextProcessor for intelligent matching...`);
     
-    const successfulFiles = results.filter(r => r.success);
-    const failedFiles = results.filter(r => !r.success);
+    // Use TextProcessor to apply the edit
+    const result = await textProcessor.processTextEdit(editContext);
     
-    if (successfulFiles.length > 0) {
-      console.log(`   ✅ Applied to ${successfulFiles.length} files`);
-      successfulFiles.forEach(file => {
-        console.log(`      - ${file.filePath} (${file.changes} changes)`);
+    if (result.success) {
+      console.log(`   ✅ Applied successfully!`);
+      console.log(`      - File: ${result.matchedFilePath}`);
+      console.log(`      - Line: ${result.lineNumber}`);
+      console.log(`      - Confidence: ${(result.confidence * 100).toFixed(1)}%`);
+      
+      if (result.alternativeMatches && result.alternativeMatches.length > 0) {
+        console.log(`      - Alternative matches found: ${result.alternativeMatches.length}`);
+      }
+      
+      // Update database status with detailed metadata
+      await updateEditStatus(edit.id, 'applied', null, {
+        matchedFilePath: result.matchedFilePath,
+        lineNumber: result.lineNumber,
+        confidence: result.confidence,
+        matchContext: result.matchContext,
+        appliedAt: new Date().toISOString(),
       });
       
-      // Update database status
-      await updateEditStatus(edit.id, 'applied');
-      
-      return { success: true, files: successfulFiles };
+      return { 
+        success: true, 
+        file: result.matchedFilePath,
+        line: result.lineNumber,
+        confidence: result.confidence
+      };
     } else {
-      console.log(`   ❌ No files found containing the text`);
-      await updateEditStatus(edit.id, 'failed', 'Text not found in codebase');
-      return { success: false, error: 'Text not found' };
-    }
-    
-    if (failedFiles.length > 0) {
-      console.log(`   ⚠️  Failed to update ${failedFiles.length} files`);
-      failedFiles.forEach(file => {
-        console.log(`      - ${file.filePath}: ${file.error}`);
+      console.log(`   ❌ Failed to apply edit`);
+      console.log(`      - Reason: ${result.errorMessage}`);
+      console.log(`      - Confidence: ${(result.confidence * 100).toFixed(1)}%`);
+      
+      if (result.alternativeMatches && result.alternativeMatches.length > 0) {
+        console.log(`      - Alternative matches found: ${result.alternativeMatches.length}`);
+        result.alternativeMatches.slice(0, 3).forEach((match, i) => {
+          console.log(`        ${i + 1}. ${match.filePath}:${match.lineNumber}`);
+        });
+      }
+      
+      await updateEditStatus(edit.id, 'failed', result.errorMessage, {
+        confidence: result.confidence,
+        hasConflicts: result.hasConflicts,
+        alternativeMatchesCount: result.alternativeMatches?.length || 0,
       });
+      
+      return { 
+        success: false, 
+        error: result.errorMessage,
+        confidence: result.confidence
+      };
     }
     
   } catch (error) {
@@ -423,7 +313,11 @@ async function main() {
       return;
     }
     
-    console.log(`📋 Found ${pendingEdits.length} pending edits:`);
+    console.log(`📋 Found ${pendingEdits.length} pending edits`);
+    console.log(`🤖 Initializing TextProcessor (advanced context-aware matching)...`);
+    
+    // Initialize TextProcessor with project root
+    const textProcessor = new TextProcessor(process.cwd());
     
     let successCount = 0;
     let failureCount = 0;
@@ -431,7 +325,7 @@ async function main() {
     
     // Process each edit
     for (const edit of pendingEdits) {
-      const result = await applyEdit(edit);
+      const result = await applyEdit(edit, textProcessor);
       results.push({ edit, result });
       
       if (result.success && !result.isDryRun) {
@@ -449,10 +343,18 @@ async function main() {
     
     if (successCount > 0 && !isDryRun) {
       console.log(`\n🎉 Successfully applied ${successCount} edits to codebase!`);
+      console.log(`📝 Review changes with: git diff`);
+      console.log(`💾 Commit changes with: git add . && git commit -m "Apply text edits"`);
+    }
+    
+    if (failureCount > 0) {
+      console.log(`\n⚠️  Some edits failed. Check the logs above for details.`);
+      console.log(`   You can retry failed edits by running this script again.`);
     }
     
   } catch (error) {
     console.error(`❌ Error: ${error.message}`);
+    console.error(error.stack);
     process.exit(1);
   } finally {
     await pool.end();

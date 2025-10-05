@@ -114,9 +114,9 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const editData = EditRequestSchema.parse(body);
 
- 
-    const textProcessor = new TextProcessor();
     const database = getDatabase();
+    const isProduction = process.env.NODE_ENV === 'production';
+    const textProcessor = !isProduction ? new TextProcessor() : null;
 
 
     const editRecord: PuppeteerTextEdit = {
@@ -138,16 +138,30 @@ export async function POST(request: NextRequest) {
 
     const editId = await database.saveEdit(editRecord);
 
-
-    const processEditData = {
-      ...editData,
-      elementContext: {
-        ...editData.elementContext,
-        heroPageElementId: editData.elementContext.heroPageElementId || undefined,
-      },
-      componentContext: editData.componentContext || undefined,
-    };
-    const result = await textProcessor.processTextEdit(processEditData);
+    let result;
+    
+    // In production, only save to database (files are read-only)
+    // In development, try to update source files
+    if (isProduction) {
+      result = {
+        success: true,
+        confidence: 1.0,
+        hasConflicts: false,
+        matchedFilePath: 'Database only (production mode)',
+        lineNumber: 0,
+        matchContext: 'Edit saved to database. Use apply-edits script to apply to source code.',
+      };
+    } else {
+      const processEditData = {
+        ...editData,
+        elementContext: {
+          ...editData.elementContext,
+          heroPageElementId: editData.elementContext.heroPageElementId || undefined,
+        },
+        componentContext: editData.componentContext || undefined,
+      };
+      result = await textProcessor!.processTextEdit(processEditData);
+    }
 
     const finalStatus: PuppeteerTextEdit['status'] = result.success ? 'applied' : 'failed';
     await database.updateEditStatus(editId, finalStatus, {
@@ -170,9 +184,12 @@ export async function POST(request: NextRequest) {
       lineNumber: result.lineNumber,
       hasConflicts: result.hasConflicts,
       message: result.success 
-        ? `Successfully updated text in ${result.matchedFilePath} at line ${result.lineNumber}`
+        ? (isProduction 
+            ? `Edit saved to database! Changes will be applied when you run 'npm run apply-edits' locally.`
+            : `Successfully updated text in ${result.matchedFilePath} at line ${result.lineNumber}`)
         : result.errorMessage || 'Edit failed',
       alternativeMatches: result.alternativeMatches?.length || 0,
+      isProduction,
     };
 
     const response = NextResponse.json(responseData, { 

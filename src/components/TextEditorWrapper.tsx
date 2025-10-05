@@ -145,6 +145,7 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
     success: boolean;
     message: string;
     editId?: string;
+    isProduction?: boolean;
   } | null>(null);
 
   const apiEndpoint = config.apiEndpoint || '/api/text-editor';
@@ -526,7 +527,10 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
           success: true,
           message: result.message || 'Text successfully updated!',
           editId: result.editId,
+          isProduction: result.isProduction,
         });
+        
+        // Update UI immediately even in production
         editingNode.element.innerHTML = editValue;
         editingNode.text = editValue;
 
@@ -596,9 +600,11 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
   };
   useEffect(() => {
     if (lastEditResult) {
+      // Show notification longer in production (10s) vs development (5s)
+      const duration = lastEditResult.isProduction ? 10000 : 5000;
       const timer = setTimeout(() => {
         setLastEditResult(null);
-      }, 5000);
+      }, duration);
       return () => clearTimeout(timer);
     }
   }, [lastEditResult]);
