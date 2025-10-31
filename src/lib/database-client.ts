@@ -14,7 +14,7 @@ export class TextEditsDatabase {
     const client = await this.pool.connect();
     try {
       const result = await client.query(
-        `INSERT INTO inline_edits (
+        `INSERT INTO inline_text_edits (
           original_text, 
           new_text, 
           status, 
@@ -65,7 +65,7 @@ export class TextEditsDatabase {
       let query = `
         SELECT original_text, element_context_css_selector, element_context_element_id, 
                element_context_element_tag
-        FROM inline_edits 
+        FROM inline_text_edits 
         WHERE page_context_page_url = $1 
         AND metadata->>'projectId' = $2`;
       
@@ -119,7 +119,7 @@ export class TextEditsDatabase {
       if (processingResult) {
         
         await client.query(
-          `UPDATE inline_edits 
+          `UPDATE inline_text_edits 
            SET status = $1, 
                processing_result_matched_file_path = $2,
                processing_result_line_number = $3,
@@ -137,7 +137,7 @@ export class TextEditsDatabase {
       } else {
         
         await client.query(
-          `UPDATE inline_edits 
+          `UPDATE inline_text_edits 
            SET status = $1, updated_at = NOW() 
            WHERE id = $2`,
           [status, editId]
@@ -156,7 +156,7 @@ export class TextEditsDatabase {
     const client = await this.pool.connect();
     try {
       let query = `
-        SELECT * FROM inline_edits 
+        SELECT * FROM inline_text_edits 
         WHERE metadata->>'projectId' = $1`;
       const params: unknown[] = [projectId];
 
