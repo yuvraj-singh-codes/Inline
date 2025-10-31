@@ -20,21 +20,7 @@ const Button = ({ onClick, className, children, ...props }: ButtonProps) => (
   </button>
 );
 
-// interface InputProps {
-//   value?: string;
-//   onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
-//   className?: string;
-//   [key: string]: unknown;
-// }
 
-// const Input = ({ value, onChange, className, ...props }: InputProps) => (
-//   <input 
-//     value={value} 
-//     onChange={onChange} 
-//     className={`border rounded px-2 py-1 ${className}`} 
-//     {...props} 
-//   />
-// );
 
 interface TextareaProps {
   value?: string;
@@ -133,12 +119,10 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
   const [textNodes, setTextNodes] = useState<TextNode[]>([]);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   
-  // Suppress unused variable warnings
   void textNodes;
   void hoveredNode;
   
   const [hoveredElement, setHoveredElement] = useState<HTMLElement | null>(null);
-  // const [showMenu, setShowMenu] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [lastEditResult, setLastEditResult] = useState<{
@@ -169,6 +153,8 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
     )) {
       cleaned = cleaned.substring(0, cleaned.length - 1);
     }
+    
+    cleaned = cleaned.replace(/\s+/g, ' ');
     
     return cleaned.trim();
   };
@@ -530,7 +516,6 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
           isProduction: result.isProduction,
         });
         
-        // Update UI immediately even in production
         editingNode.element.innerHTML = editValue;
         editingNode.text = editValue;
 
@@ -600,7 +585,6 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
   };
   useEffect(() => {
     if (lastEditResult) {
-      // Show notification longer in production (10s) vs development (5s)
       const duration = lastEditResult.isProduction ? 10000 : 5000;
       const timer = setTimeout(() => {
         setLastEditResult(null);
@@ -660,82 +644,181 @@ const DeepTextEditor: React.FC<{ enabled: boolean; config: TextEditorConfig }> =
       )}
       {editingNode && (
         <div 
-          className="fixed inset-0  bg-opacity-50 flex items-center justify-center z-[10000]" 
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[10000] animate-in fade-in duration-200" 
           style={{ pointerEvents: 'auto' }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setEditingNode(null);
+            }
+          }}
         >
           <div 
-            className="bg-white rounded-lg p-6 max-w-md w-full mx-4 text-editor-modal" 
+            className="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4 text-editor-modal animate-in slide-in-from-bottom-4 duration-300" 
             style={{ color: '#000', backgroundColor: '#fff' }}
             onClick={(e) => {
-
               e.stopPropagation();
             }}
           >
-            <h3 className="text-lg font-semibold mb-4 text-gray-900">Edit Text</h3>
-            
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Original Text:
-              </label>
-              <div className="p-2 bg-gray-50 rounded border text-sm text-gray-600">
-                {editingNode.originalText}
+            {/* Header */}
+            <div className="border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Text Editor</h3>
+                  <p className="text-xs text-gray-500">Edit content directly</p>
+                </div>
               </div>
+              <button
+                onClick={() => setEditingNode(null)}
+                className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors"
+                aria-label="Close"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
 
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                New Text:
-              </label>
-              <Textarea
-                value={editValue}
-                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setEditValue(e.target.value)}
-                className="w-full border-gray-300 rounded-md"
-                style={{ color: '#000', backgroundColor: '#fff', border: '1px solid #ccc' }}
-                autoFocus
-                rows={3}
-              />
+            {/* Content */}
+            <div className="px-4 py-3 space-y-3">
+              {/* Original Text */}
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                  <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  Original Text
+                </label>
+                <div className="p-3 bg-gradient-to-br from-gray-50 to-gray-100 rounded-lg border border-gray-200 text-sm text-gray-700 font-mono leading-relaxed shadow-inner">
+                  {editingNode.originalText}
+                </div>
+              </div>
+
+              {/* New Text */}
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                  <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                  New Text
+                  <span className="ml-auto text-xs text-gray-400 font-normal">
+                    {editValue.length} characters
+                  </span>
+                </label>
+                <Textarea
+                  value={editValue}
+                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setEditValue(e.target.value)}
+                  className="w-full border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all font-mono text-sm leading-relaxed resize-none"
+                  style={{ color: '#000', backgroundColor: '#fff', minHeight: '80px' }}
+                  autoFocus
+                  rows={3}
+                  placeholder="Enter your new text here..."
+                />
+              </div>
+
+              {/* Status Message */}
+              {lastEditResult && (
+                <div className={`p-4 rounded-xl border-2 animate-in slide-in-from-top-2 duration-300 ${
+                  lastEditResult.success 
+                    ? 'bg-green-50 border-green-200 text-green-800' 
+                    : 'bg-red-50 border-red-200 text-red-800'
+                }`}>
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                      lastEditResult.success ? 'bg-green-500' : 'bg-red-500'
+                    }`}>
+                      {lastEditResult.success ? (
+                        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                        </svg>
+                      ) : (
+                        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-semibold text-sm">
+                        {lastEditResult.success ? 'Success!' : 'Error'}
+                      </p>
+                      <p className="text-sm mt-0.5 opacity-90">{lastEditResult.message}</p>
+                    </div>
+                    <button
+                      onClick={() => setLastEditResult(null)}
+                      className="text-sm opacity-50 hover:opacity-100 transition-opacity"
+                      aria-label="Dismiss"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="flex gap-2">
+            {/* Footer */}
+            <div className="border-t border-gray-200 px-4 py-3 bg-gray-50 rounded-b-xl flex gap-2">
               <Button
                 onClick={saveEdit}
-                disabled={isProcessing}
-                className="bg-blue-500 hover:bg-blue-600 text-white flex-1"
+                disabled={isProcessing || !editValue.trim()}
+                className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-md font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 px-4 py-2"
               >
-                {isProcessing ? 'Saving...' : 'Save'}
+                {isProcessing ? (
+                  <span className="flex items-center gap-2">
+                    <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Saving...
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Save
+                  </span>
+                )}
               </Button>
               <Button
                 onClick={resetToOriginal}
                 disabled={isResetting}
-                className="bg-yellow-500 hover:bg-yellow-600 text-white"
+                className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-md font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 px-3 py-2"
               >
-                {isResetting ? 'Resetting...' : 'Reset'}
+                {isResetting ? (
+                  <span className="flex items-center gap-2">
+                    <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Reset
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Reset
+                  </span>
+                )}
               </Button>
               <Button
                 onClick={() => setEditingNode(null)}
-                className="bg-gray-500 hover:bg-gray-600 text-white"
+                className="bg-gray-500 hover:bg-gray-600 text-white shadow-md font-medium transition-all duration-200 px-3 py-2"
               >
-                Cancel
+                <span className="flex items-center gap-2">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  Cancel
+                </span>
               </Button>
             </div>
-
-            {lastEditResult && (
-              <div className={`mt-4 p-3 rounded ${
-                lastEditResult.success 
-                  ? 'bg-green-100 text-green-700' 
-                  : 'bg-red-100 text-red-700'
-              }`}>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">{lastEditResult.message}</span>
-                  <button
-                    onClick={() => setLastEditResult(null)}
-                    className="text-xs ml-2 opacity-70 hover:opacity-100"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}

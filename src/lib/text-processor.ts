@@ -46,6 +46,7 @@ interface FileMatch {
   isAttributeMatch?: boolean;
   isTextContentMatch?: boolean;
   isExactMatch?: boolean;
+  windowSize?: number;
 }
 
 interface ScoredMatch extends FileMatch {
@@ -174,7 +175,6 @@ export class TextProcessor {
       normalized = normalized.replace(/[\u00AB\u00BB]/g, '"'); 
       normalized = normalized.replace(/[\u2039\u203A]/g, "'");
      
-      // Preserve exact hyphen/dash characters - do NOT convert them
       
      
       normalized = normalized.replace(/[\u00A0]/g, ' '); 
@@ -212,7 +212,6 @@ export class TextProcessor {
       const withoutPrefix = text.replace(prefix, '').trim();
       if (withoutPrefix && withoutPrefix !== text) {
         variations.push(withoutPrefix);
-        // Also add normalized version
         const normalizedWithoutPrefix = normalizeQuotes(withoutPrefix);
         if (normalizedWithoutPrefix !== withoutPrefix) {
           variations.push(normalizedWithoutPrefix);
@@ -229,7 +228,6 @@ export class TextProcessor {
       const withoutSuffix = text.replace(suffix, '').trim();
       if (withoutSuffix && withoutSuffix !== text) {
         variations.push(withoutSuffix);
-        // Also add normalized version
         const normalizedWithoutSuffix = normalizeQuotes(withoutSuffix);
         if (normalizedWithoutSuffix !== withoutSuffix) {
           variations.push(normalizedWithoutSuffix);
@@ -252,7 +250,6 @@ export class TextProcessor {
 
   private isTextContentMatch(line: string, variation: string): boolean {
     
-    // const trimmedLine = line.trim();
     
  
     if (!this.isAttributeMatch(line, variation)) {
@@ -265,9 +262,12 @@ export class TextProcessor {
       'description=', 'text=', 'value=', 'message=', 'caption='
     ];
     
+    const lowerLine = line.toLowerCase();
     const hasContentAttribute = contentAttributes.some(attr => 
-      line.toLowerCase().includes(attr.toLowerCase()) && 
+      lowerLine.includes(attr.toLowerCase()) && 
       line.includes(variation)
+    ) || (
+      /\btitle\b/i.test(lowerLine) && line.includes(variation)
     );
     
     if (hasContentAttribute) {
@@ -282,6 +282,28 @@ export class TextProcessor {
     lineWithoutAttributes = lineWithoutAttributes.replace(/\{[^}]*\}/g, '{}');
     
     return lineWithoutAttributes.includes(variation);
+  }
+
+  private isExactMatch(windowText: string, searchText: string): boolean {
+    const normalizedWindow = this.cleanSearchText(windowText);
+    const normalizedSearch = this.cleanSearchText(searchText);
+    
+    const patterns = [
+      new RegExp(`^['"\`]${this.escapeRegex(normalizedSearch)}['"\`]$`),
+      
+      new RegExp(`^${this.escapeRegex(normalizedSearch)}$`),
+      
+      new RegExp(`\\s${this.escapeRegex(normalizedSearch)}[,;.!?]`),
+      
+      new RegExp(`\\w+\\s*:\\s*['"\`]${this.escapeRegex(normalizedSearch)}['"\`]\\s*[,}]`),
+      
+      new RegExp(`\\w+\\s*=\\s*['"\`]${this.escapeRegex(normalizedSearch)}['"\`]`),
+      
+      // HTML/JSX text content between tags
+      new RegExp(`>\\s*${this.escapeRegex(normalizedSearch)}\\s*<`),
+    ];
+    
+    return patterns.some(pattern => pattern.test(normalizedWindow));
   }
 
   private escapeRegex(string: string): string {
@@ -452,7 +474,6 @@ export class TextProcessor {
       normalizedIndex += normalizedChar.length;
     }
     
-    // const startIndex = originalIndex;
     
     let remainingSearchLength = normalizedSearchText.length;
     const candidateStart = originalIndex;
@@ -566,23 +587,15 @@ export class TextProcessor {
 
   async processTextEdit(editContext: EditContext): Promise<ProcessResult> {
     try {
-      console.log('[TextProcessor] Starting search for text:', editContext.originalText);
-      console.log('[TextProcessor] Project root:', this.projectRoot);
-      console.log('[TextProcessor] Source dir:', this.sourceDir);
  
       const allMatches = await this.findTextInSourceFiles(editContext.originalText);
 
-      console.log('[TextProcessor] Found', allMatches.length, 'matches');
       if (allMatches.length === 0) {
-        console.error('[TextProcessor] NO MATCHES FOUND');
-        console.error('[TextProcessor] Searched for:', editContext.originalText);
-        console.error('[TextProcessor] In directory:', this.sourceDir);
-        console.error('[TextProcessor] Page context:', editContext.pageContext);
         return {
           success: false,
           confidence: 0,
           hasConflicts: false,
-          errorMessage: `No matches found for text: "${editContext.originalText.substring(0, 50)}..." in ${this.sourceDir}`,
+          errorMessage: `No matches found`,
         };
       }
 
@@ -602,7 +615,7 @@ export class TextProcessor {
           hasConflicts: scoredMatches.length > 1,
           alternativeMatches: scoredMatches,
           errorMessage: bestMatch 
-            ? `Low confidence match`
+            ? `Low confidence match (${(bestMatch.confidence * 100).toFixed(1)}%)`
             : 'No matches found',
         };
       }
@@ -643,122 +656,110 @@ export class TextProcessor {
     const cleanedText = this.cleanSearchText(originalText);
     const searchVariations = this.extractDynamicPart(cleanedText);
     
-    console.log('[TextProcessor] Original text:', JSON.stringify(originalText));
-    console.log('[TextProcessor] Cleaned text:', JSON.stringify(cleanedText));
-    console.log('[TextProcessor] Search variations:', searchVariations);
-    
-    if (originalText.includes('Häufig gestellte Fragen')) {
-      console.log('[TEMP DEBUG] FAQ text processing:');
-      console.log('[TEMP DEBUG] Original:', JSON.stringify(originalText));
-      console.log('[TEMP DEBUG] Cleaned:', JSON.stringify(cleanedText));
-      console.log('[TEMP DEBUG] Variations:', searchVariations);
-    }
-    
-    
-    
-    const patterns = [
-      '**/*.{ts,tsx,js,jsx}',
-      '**/*.{vue,svelte}',
-      '**/*.{html,htm}',
-      '**/*.md',
-      '**/*.mdx',
-      '**/*.json',
-      '**/*.faq.json',
+    const candidateDirs = [
+      this.projectRoot,
+      path.join(this.projectRoot, 'src'),
+      path.join(this.projectRoot, 'app'),
+      path.join(this.projectRoot, 'pages'),
+      path.join(this.projectRoot, 'components'),
+    ];
+    const searchDirs = Array.from(new Set(candidateDirs.filter(dir => {
+      try { return fsSync.statSync(dir).isDirectory(); } catch { return false; }
+    }))
+    );
+    const includeExtensions = ['ts','tsx','js','jsx','json','md','mdx','txt','html','css','scss'];
+    const ignoreGlobs = [
+      '**/node_modules/**',
+      '**/.next/**',
+      '**/dist/**',
+      '**/build/**',
+      '**/.git/**',
+      '**/*.map',
+      '**/final-metadata.json',
+      '**/package.json',
+      '**/tsconfig.json',
+      '**/components.json',
+      '**/tailwind.config.*',
+      '**/next.config.*',
+      '**/postcss.config.*'
     ];
 
-    const allFiles: string[] = [];
-    const searchDirs = [this.sourceDir];
-    if (this.sourceDir !== this.projectRoot) {
-      searchDirs.push(this.projectRoot);
-    }
-
+    let allFiles: string[] = [];
     for (const searchDir of searchDirs) {
-    for (const pattern of patterns) {
       try {
-        const files = await glob(pattern, { 
-            cwd: searchDir,
-          ignore: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.next/**']
+        const files = await glob(`**/*.{${includeExtensions.join(',')}}`, {
+          cwd: searchDir,
+          ignore: ignoreGlobs,
+          nodir: true,
         });
-          allFiles.push(...files.map(f => path.join(searchDir, f)));
+        allFiles.push(...files.map(f => path.join(searchDir, f)));
       } catch (error) {
-          console.warn(`Failed to glob pattern ${pattern} in ${searchDir}:`, error);
-      }
+        console.warn(`Failed to glob in ${searchDir}:`, error);
       }
     }
-
-    console.log(`[TextProcessor] Found ${allFiles.length} total files to search`);
-    console.log(`[TextProcessor] Sample files:`, allFiles.slice(0, 5));
 
     const matches: FileMatch[] = [];
 
     for (const filePath of allFiles) {
       try {
-        if (filePath.includes('FaqSection.tsx')) {
-          console.log('[TEMP DEBUG] Searching FaqSection.tsx:', filePath);
-        }
         const content = await fs.readFile(filePath, 'utf-8');
         const lines = content.split('\n');
+        
+        const normalizedContent = this.cleanSearchText(content);
 
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          
-          for (const variation of searchVariations) {
-            const hasExactMatch = this.hasExactTextMatch(line, variation);
-            const normalizedLine = this.cleanSearchText(line);
-            const hasSubstringMatch = normalizedLine.includes(variation);
+        for (const variation of searchVariations) {
+          if (normalizedContent.includes(variation)) {
+            let bestMatch = null;
+            let bestWindowSize = 999;
             
-            const shouldUseMatch = hasExactMatch;
-            
-            if (originalText.includes('Häufig gestellte Fragen') && filePath.includes('FaqSection.tsx') && line.includes('Häufig')) {
-              console.log('[TEMP DEBUG] Found FAQ line in FaqSection.tsx');
-              console.log('[TEMP DEBUG] Line:', JSON.stringify(line));
-              console.log('[TEMP DEBUG] Variation:', JSON.stringify(variation));
-              console.log('[TEMP DEBUG] Has exact match:', hasExactMatch);
-              console.log('[TEMP DEBUG] Has substring match:', hasSubstringMatch);
+            for (let i = 0; i < lines.length; i++) {
+              for (let windowSize = 1; windowSize <= 5; windowSize++) {
+                if (i + windowSize > lines.length) break;
+                
+                const windowText = lines.slice(i, i + windowSize).join('\n');
+                const normalizedWindow = this.cleanSearchText(windowText);
+                
+                if (normalizedWindow.includes(variation)) {
+                  const lineNumber = i + 1;
+                  const isAttributeMatch = this.isAttributeMatch(windowText, variation);
+                  const isTextContentMatch = this.isTextContentMatch(windowText, variation);
+                  const isExactMatch = this.isExactMatch(windowText, variation);
+
+                  if (isTextContentMatch || !isAttributeMatch || isExactMatch) {
+                    if (isExactMatch) {
+                      if (windowSize < bestWindowSize) {
+                        bestMatch = {
+                          filePath: path.relative(this.projectRoot, filePath),
+                          lineNumber: lineNumber,
+                          originalLine: lines[i],
+                          updatedLine: lines[i],
+                          matchedText: variation,
+                          matchedVariation: variation !== cleanedText ? variation : undefined,
+                          contextBefore: lines.slice(Math.max(0, i - 3), i),
+                          contextAfter: lines.slice(i + windowSize, Math.min(lines.length, i + windowSize + 3)),
+                          isAttributeMatch,
+                          isTextContentMatch,
+                          isExactMatch: true,
+                          windowSize: windowSize,
+                        };
+                        bestWindowSize = windowSize;
+                      }
+                    }
+                    break;
+                  }
+                }
+              }
             }
             
-            if (shouldUseMatch) {
-            
-              const isAttributeMatch = this.isAttributeMatch(normalizedLine, variation);
-              const isTextContentMatch = this.isTextContentMatch(normalizedLine, variation);
-              
-              const originalTextInFile = this.extractOriginalTextFromLine(line, variation, normalizedLine);
-              
-              matches.push({
-                filePath: path.relative(this.projectRoot, filePath),
-                lineNumber: i + 1,
-                originalLine: line,
-                updatedLine: line.replace(originalTextInFile, searchVariations[0]),
-                matchedText: originalTextInFile, 
-                matchedVariation: variation !== cleanedText ? variation : undefined,
-                contextBefore: lines.slice(Math.max(0, i - 3), i),
-                contextAfter: lines.slice(i + 1, Math.min(lines.length, i + 4)),
-                isAttributeMatch,
-                isTextContentMatch,
-                isExactMatch: hasExactMatch,
-              });
+            if (bestMatch) {
+              matches.push(bestMatch);
             }
           }
         }
+        
       } catch (error) {
         console.warn(`Failed to read file ${filePath}:`, error);
       }
-    }
-
-    console.log(`[TextProcessor] Total raw matches found: ${matches.length}`);
-    if (matches.length > 0) {
-      console.log('[TextProcessor] First 3 matches:');
-      matches.slice(0, 3).forEach((match, i) => {
-        console.log(`  ${i + 1}. ${match.filePath}:${match.lineNumber}`);
-        console.log(`     Line: ${match.originalLine.substring(0, 100)}`);
-      });
-    }
-    
-    if (originalText.includes('Häufig gestellte Fragen')) {
-      console.log('[TEMP DEBUG] Raw matches found:', matches.length);
-      matches.forEach((match, i) => {
-        console.log(`[TEMP DEBUG] Match ${i}: ${match.filePath}:${match.lineNumber}`);
-      });
     }
 
     return matches;
@@ -1072,38 +1073,143 @@ export class TextProcessor {
     return bestMatch;
   }
 
+  private replaceTextInWindow(windowText: string, oldText: string, newText: string): string {
+    console.log('🔍 replaceTextInWindow called:');
+    console.log('🔍 Window text:', windowText);
+    console.log('🔍 Old text:', oldText);
+    console.log('🔍 New text:', newText);
+    
+    const strategies = [
+      () => {
+        const objPattern = new RegExp(`(\\w+\\s*:\\s*['"\`])${this.escapeRegex(oldText)}(['"\`]\\s*[,}])`, 'g');
+        return windowText.replace(objPattern, `$1${newText}$2`);
+      },
+      
+      () => {
+        const objCommaPattern = new RegExp(`(\\w+\\s*:\\s*['"\`])${this.escapeRegex(oldText)}(['"\`]\\s*,)`, 'g');
+        return windowText.replace(objCommaPattern, `$1${newText}$2`);
+      },
+      
+      () => {
+        const quotedPattern = new RegExp(`(['"\`])${this.escapeRegex(oldText)}\\1`, 'g');
+        return windowText.replace(quotedPattern, `$1${newText}$1`);
+      },
+      
+      () => {
+        const jsxPattern = new RegExp(`(\\w+\\s*=\\s*['"\`])${this.escapeRegex(oldText)}(['"\`])`, 'g');
+        return windowText.replace(jsxPattern, `$1${newText}$2`);
+      },
+      
+      () => {
+        const normalizedWindowText = windowText.replace(/\s+/g, ' ').trim().replace(/[.,;:!?]+$/, '');
+        const normalizedOldText = oldText.replace(/\s+/g, ' ').trim().replace(/[.,;:!?]+$/, '');
+        
+        console.log('🔍 Strategy 5 - Normalized window text:', normalizedWindowText);
+        console.log('🔍 Strategy 5 - Normalized old text:', normalizedOldText);
+        
+        if (normalizedWindowText === normalizedOldText) {
+          console.log('🔍 Strategy 5 - Exact match found, replacing with:', newText);
+          return newText;
+        }
+        
+        return windowText;
+      },
+      
+      () => windowText.replace(oldText, newText),
+    ];
+    
+    for (let i = 0; i < strategies.length; i++) {
+      const strategy = strategies[i];
+      const result = strategy();
+      console.log(`🔍 Strategy ${i + 1} result:`, result);
+      if (result !== windowText) {
+        console.log(`🔍 Strategy ${i + 1} succeeded!`);
+        return result;
+      }
+    }
+    
+    console.log('🔍 No strategy succeeded, returning original text');
+    return windowText.replace(oldText, newText);
+  }
+
   private async updateSourceFile(match: FileMatch, context: EditContext): Promise<{ success: boolean; errorMessage?: string }> {
     try {
       const fullPath = path.isAbsolute(match.filePath) 
         ? match.filePath 
         : path.join(this.projectRoot, match.filePath);
         
-        
       const content = await fs.readFile(fullPath, 'utf-8');
       const lines = content.split('\n');
       
-   
-      if (match.lineNumber <= lines.length) {
-        const originalLine = lines[match.lineNumber - 1];
-        let updatedLine;
-        updatedLine = this.replaceTextContent(originalLine, match.matchedText, context.newText);
-        
-        if (updatedLine === originalLine) {
-          updatedLine = originalLine.replace(match.matchedText, context.newText);
-        }
-        
-        lines[match.lineNumber - 1] = updatedLine;
-        
-        const updatedContent = lines.join('\n');
-        await fs.writeFile(fullPath, updatedContent, 'utf-8');
-        
-        return { success: true };
-      } else {
-        return { 
-          success: false, 
-          errorMessage: `Line number ${match.lineNumber} exceeds file length` 
+      const lineIndex = match.lineNumber - 1;
+      
+      if (lineIndex < 0 || lineIndex >= lines.length) {
+        return {
+          success: false,
+          errorMessage: `Line number ${match.lineNumber} out of bounds`
         };
       }
+      
+      const normalizedSearchText = this.cleanSearchText(match.matchedText);
+      let foundWindow = null;
+      let windowSize = 0;
+      
+      for (let size = 1; size <= 5 && lineIndex + size <= lines.length; size++) {
+        const windowText = lines.slice(lineIndex, lineIndex + size).join('\n');
+        const normalizedWindow = this.cleanSearchText(windowText);
+        
+        if (normalizedWindow.includes(normalizedSearchText)) {
+          foundWindow = windowText;
+          windowSize = size;
+          break;
+        }
+      }
+      
+      if (!foundWindow) {
+        return {
+          success: false,
+          errorMessage: 'Could not find text in expected location'
+        };
+      }
+      
+      const firstLine = lines[lineIndex];
+      const indentMatch = firstLine.match(/^(\s*)/);
+      const indentation = indentMatch ? indentMatch[1] : '';
+      
+      if (match.isExactMatch) {
+        console.log('🔍 Processing exact match replacement');
+        console.log('🔍 Original text:', match.matchedText);
+        console.log('🔍 New text:', context.newText);
+        console.log('🔍 Window size:', windowSize);
+        
+        if (windowSize === 1) {
+          const originalLine = lines[lineIndex];
+          console.log('🔍 Original line:', originalLine);
+          const updatedLine = this.replaceTextInWindow(originalLine, match.matchedText, context.newText);
+          console.log('🔍 Updated line:', updatedLine);
+          lines[lineIndex] = updatedLine;
+        } else {
+          const windowText = lines.slice(lineIndex, lineIndex + windowSize).join('\n');
+          console.log('🔍 Original window text:', windowText);
+          const updatedWindowText = this.replaceTextInWindow(windowText, match.matchedText, context.newText);
+          console.log('🔍 Updated window text:', updatedWindowText);
+          const updatedLines = updatedWindowText.split('\n');
+          lines.splice(lineIndex, windowSize, ...updatedLines);
+        }
+      } else {
+        const replacementText = indentation + context.newText.trim();
+        lines.splice(lineIndex, windowSize, replacementText);
+      }
+      
+      const updatedContent = lines.join('\n');
+      console.log('🔍 Writing updated content to file:', fullPath);
+      console.log('🔍 Updated content preview:', updatedContent.substring(0, 200) + '...');
+      
+      await fs.writeFile(fullPath, updatedContent, 'utf-8');
+      console.log('🔍 File write completed successfully');
+      
+      return { success: true };
+      
     } catch (error) {
       return { 
         success: false, 
@@ -1131,25 +1237,45 @@ export class TextProcessor {
     fileCount: number;
     supportedExtensions: string[];
   }> {
-    const patterns = ['**/*.{ts,tsx,js,jsx,vue,svelte,html,md,mdx,json,faq.json}'];
-    let fileCount = 0;
-    
-    const searchDirs = [this.sourceDir];
-    if (this.sourceDir !== this.projectRoot) {
-      searchDirs.push(this.projectRoot);
-    }
+    const candidateDirs = [
+      this.projectRoot,
+      path.join(this.projectRoot, 'src'),
+      path.join(this.projectRoot, 'app'),
+      path.join(this.projectRoot, 'pages'),
+      path.join(this.projectRoot, 'components'),
+    ];
+    const searchDirs = Array.from(new Set(candidateDirs.filter(dir => {
+      try { return fsSync.statSync(dir).isDirectory(); } catch { return false; }
+    }))
+    );
+    const includeExtensions = ['ts','tsx','js','jsx','json','md','mdx','txt','html','css','scss'];
+    const ignoreGlobs = [
+      '**/node_modules/**',
+      '**/.next/**',
+      '**/dist/**',
+      '**/build/**',
+      '**/.git/**',
+      '**/*.map',
+      '**/final-metadata.json',
+      '**/package.json',
+      '**/tsconfig.json',
+      '**/components.json',
+      '**/tailwind.config.*',
+      '**/next.config.*',
+      '**/postcss.config.*'
+    ];
 
+    let fileCount = 0;
     for (const searchDir of searchDirs) {
-    for (const pattern of patterns) {
       try {
-        const files = await glob(pattern, { 
-            cwd: searchDir,
-          ignore: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.next/**']
+        const files = await glob(`**/*.{${includeExtensions.join(',')}}`, {
+          cwd: searchDir,
+          ignore: ignoreGlobs,
+          nodir: true,
         });
         fileCount += files.length;
       } catch (error) {
-          console.warn(`Failed to count files for pattern ${pattern} in ${searchDir}:`, error);
-        }
+        console.warn(`Failed to count files in ${searchDir}:`, error);
       }
     }
 
